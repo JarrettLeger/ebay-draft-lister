@@ -1,0 +1,24 @@
+# Card data extracted/cached between phases (contains your inventory info)
+*_data.json
+
+# Generated output — CSVs and QC reports from actual runs
+eBay_Drafts_*.csv
+eBay_Drafts_*_review.html
+
+# Local working folders (raw photos, sorted photos, review queue)
+Done/
+Needs Review/
+eBay/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment / secrets
+.env
+
+# OS cruft
+.DS_Store
+Thumbs.db
