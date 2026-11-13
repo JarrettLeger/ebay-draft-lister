@@ -4,6 +4,7 @@ __pycache__/
 .env
 data/
 node_modules/
+node_modules.previous/
 frontend/dist/
 *.tsbuildinfo
 .pnpm-store/

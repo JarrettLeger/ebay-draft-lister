@@ -6,6 +6,8 @@ The `feature/openai-v2-ui` branch adds a Windows-first FastAPI + SQLite + React/
 
 V2 provides persistent inventory, photo pairing/review, OpenAI structured vision extraction, editable listings, explicit manual pricing, Cloudinary JPEG uploads and compatible eBay draft CSV export. The original script below is preserved as a legacy reference and is not used by v2. Master is unchanged.
 
+Background batches now identify or upload selected cards with saved progress, cancellation and restart recovery. Cards still require manual review and pricing before export.
+
 See [implementation and validation](docs/V2-IMPLEMENTATION.md) for scope and remaining work, and [the initial UI](docs/v2-ui.png) for a preview.
 
 ---

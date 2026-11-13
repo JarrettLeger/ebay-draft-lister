@@ -4,14 +4,17 @@ import json
 import os
 import sqlite3
 import threading
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Literal
 from pathlib import Path
 from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import services
 from .compat import HEADER_ROW, INFO_ROWS, build_title
@@ -27,7 +30,9 @@ def create_app(data_dir=None):
     photos = root / 'photos'
     photos.mkdir(exist_ok=True)
     db = root / 'inventory.sqlite3'
-    lock = threading.Lock()
+    lock = threading.RLock()
+    stopping = threading.Event()
+    worker = None
 
     def connect():
         connection = sqlite3.connect(db, timeout=30)
@@ -36,11 +41,21 @@ def create_app(data_dir=None):
 
     with connect() as conn:
         conn.execute('CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        conn.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        for ident, payload in conn.execute('SELECT id,payload FROM jobs').fetchall():
+            job = json.loads(payload)
+            if job['state'] in ('running', 'cancelling'):
+                job.update(state='interrupted', current=None)
+                conn.execute('UPDATE jobs SET payload=? WHERE id=?', (json.dumps(job), ident))
         # Network work interrupted by shutdown must be recoverable.
         for ident, payload in conn.execute('SELECT id,payload FROM cards').fetchall():
             card = json.loads(payload)
             if card['state'] == 'processing':
                 card.update(state='failed', error='Interrupted; retry the operation')
+            elif card['state'] == 'queued':
+                card['state'] = card.pop('before_queue', 'needs_review')
+            card.pop('job_id', None)
+            if card != json.loads(payload):
                 conn.execute('UPDATE cards SET payload=? WHERE id=?', (json.dumps(card), ident))
 
     def read(ident):
@@ -58,7 +73,15 @@ def create_app(data_dir=None):
         card['issues'] = issues(card)
         return card
 
-    app = FastAPI(title='eBay Draft Lister v2')
+    @asynccontextmanager
+    async def lifespan(app):
+        yield
+        stopping.set()  # In-flight calls finish; no subsequent card starts.
+
+    app = FastAPI(title='eBay Draft Lister v2', lifespan=lifespan)
+
+    def unavailable(card):
+        return card['state'] in ('processing', 'queued')
 
     @app.middleware('http')
     async def local_only(request: Request, call_next):
@@ -124,7 +147,7 @@ def create_app(data_dir=None):
     def edit(ident: str, listing: Listing):
         with lock:
             card = read(ident)
-            if card['state'] == 'processing':
+            if unavailable(card):
                 raise HTTPException(409, 'Processing; wait before editing')
             card['listing'] = listing.model_dump(mode='json')
             card['state'] = 'ready' if not issues(card) else 'needs_review'
@@ -150,7 +173,7 @@ def create_app(data_dir=None):
     def unpair(ident: str):
         with lock:
             card = read(ident)
-            if not card['back'] or card['state'] == 'processing':
+            if not card['back'] or unavailable(card):
                 raise HTTPException(409, 'No removable back photo')
             back = dict(id=uuid4().hex, front=card['back'], back=None, original='Separated back photo',
                 front_url=None, back_url=None, listing=Listing().model_dump(mode='json'), state='imported', warnings=[], error=None, usage={})
@@ -163,11 +186,14 @@ def create_app(data_dir=None):
 
     @app.post('/api/cards/{ident}/{operation}')
     def process(ident: str, operation: str):
+        return process_card(ident, operation)
+
+    def process_card(ident, operation, job_id=None):
         if operation not in ('extract', 'upload', 'swap'):
             raise HTTPException(404)
         with lock:
             card = read(ident)
-            if card['state'] == 'processing':
+            if card['state'] == 'processing' or (card.get('job_id') and card['job_id'] != job_id):
                 raise HTTPException(409, 'Already processing')
             if operation == 'swap':
                 if not card['back']:
@@ -178,6 +204,7 @@ def create_app(data_dir=None):
                 card['state'] = 'needs_review'
                 save(card)
                 return decorate(card)
+            card.pop('before_queue', None)
             card.update(state='processing', error=None)
             if operation == 'extract':
                 card['listing']['reviewed'] = False
@@ -204,6 +231,103 @@ def create_app(data_dir=None):
             save(card)
         return decorate(card)
 
+    def read_job(ident):
+        with connect() as conn:
+            row = conn.execute('SELECT payload FROM jobs WHERE id=?', (ident,)).fetchone()
+        if not row:
+            raise HTTPException(404, 'Batch not found')
+        return json.loads(row[0])
+
+    def save_job(job):
+        with connect() as conn:
+            conn.execute('INSERT OR REPLACE INTO jobs VALUES (?,?)', (job['id'], json.dumps(job)))
+
+    def run_batch(ident):
+        try:
+            for card_id in read_job(ident)['ids']:
+                with lock:
+                    job = read_job(ident)
+                    if job['state'] == 'cancelling' or stopping.is_set():
+                        break
+                    job['current'] = card_id
+                    save_job(job)
+                result = process_card(card_id, job['operation'], ident)
+                with lock:
+                    job = read_job(ident)
+                    finished = read(card_id)
+                    finished.pop('job_id', None)
+                    save(finished)
+                    job['results'].append({'id': card_id, 'state': result['state']})
+                    job['completed'] += 1
+                    job['failed'] += int(result['state'] == 'failed')
+                    save_job(job)
+        except Exception:
+            with lock:
+                job = read_job(ident)
+                job['state'] = 'interrupted'
+                save_job(job)
+        finally:
+            with lock:
+                job = read_job(ident)
+                if job['state'] != 'interrupted':
+                    job['state'] = ('cancelled' if job['state'] == 'cancelling' else
+                                    'interrupted' if stopping.is_set() else 'completed')
+                job['current'] = None
+                # Release every reservation and restore unstarted cards atomically.
+                with connect() as conn:
+                    for card_id in job['ids']:
+                        card = read(card_id)
+                        if card.get('job_id') == ident:
+                            card.pop('job_id', None)
+                            if card['state'] == 'queued':
+                                card['state'] = card.pop('before_queue')
+                            elif card['state'] == 'processing':
+                                card.update(state='failed', error='Interrupted; retry the operation')
+                            conn.execute('UPDATE cards SET payload=? WHERE id=?', (json.dumps(card), card_id))
+                    conn.execute('UPDATE jobs SET payload=? WHERE id=?', (json.dumps(job), ident))
+
+    class Batch(BaseModel):
+        ids: list[str] = Field(min_length=1, max_length=100)
+        operation: Literal['extract', 'upload']
+
+    @app.get('/api/jobs')
+    def jobs():
+        with connect() as conn:
+            return [json.loads(row[0]) for row in conn.execute('SELECT payload FROM jobs ORDER BY rowid DESC LIMIT 20')]
+
+    @app.post('/api/jobs')
+    def start_batch(body: Batch):
+        nonlocal worker
+        with lock:
+            if stopping.is_set() or (worker and worker.is_alive()):
+                raise HTTPException(409, 'A batch is still running; wait for it to finish')
+            selected = [read(ident) for ident in dict.fromkeys(body.ids)]
+            if any(unavailable(card) for card in selected):
+                raise HTTPException(409, 'One or more cards are already queued or processing')
+            required = ('OPENAI_API_KEY',) if body.operation == 'extract' else ('CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_UPLOAD_PRESET')
+            if any(not os.getenv(key) for key in required):
+                raise HTTPException(400, 'Configure the connection in .env and restart before starting this batch')
+            job = dict(id=uuid4().hex, operation=body.operation, ids=[c['id'] for c in selected],
+                state='running', completed=0, failed=0, current=None, results=[],
+                created_at=datetime.now(timezone.utc).isoformat())
+            with connect() as conn:
+                for card in selected:
+                    card.update(before_queue=card['state'], state='queued', job_id=job['id'])
+                    conn.execute('UPDATE cards SET payload=? WHERE id=?', (json.dumps(card), card['id']))
+                conn.execute('INSERT INTO jobs VALUES (?,?)', (job['id'], json.dumps(job)))
+            worker = threading.Thread(target=run_batch, args=(job['id'],), daemon=True)
+            worker.start()
+            return job
+
+    @app.post('/api/jobs/{ident}/cancel')
+    def cancel_batch(ident: str):
+        with lock:
+            job = read_job(ident)
+            if job['state'] == 'running':
+                job['state'] = 'cancelling'
+                save_job(job)
+            return job
+
     class Export(BaseModel):
         ids: list[str]
 
@@ -211,7 +335,7 @@ def create_app(data_dir=None):
     def export(body: Export):
         with lock:
             selected = [read(ident) for ident in dict.fromkeys(body.ids)]
-            if not selected or any(issues(c) or c['state'] == 'processing' for c in selected):
+            if not selected or any(issues(c) or unavailable(c) for c in selected):
                 raise HTTPException(400, 'Select reviewed, priced cards with uploaded photos')
             stream = io.StringIO(newline='')
             stream.write('\r\n'.join(INFO_ROWS + [HEADER_ROW]) + '\r\n')

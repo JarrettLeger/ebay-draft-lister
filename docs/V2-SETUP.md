@@ -19,11 +19,21 @@ This foundation is a desktop-style browser application served on your computer. 
 - Review all fields and photos, set a positive USD price with at most two decimals, check the review box, and save. The checklist shows remaining blockers. Select eligible cards in inventory and **Export selected CSV**.
 - Export creates drafts only. Upload the file to Seller Hub → Reports → Upload. Review drafts, current category/condition requirements, shipping, location, return/payment policies and price in Seller Hub before publishing. The CSV keeps the original template information rows, exact column order and identifiers, CRLF line endings, and pipe-separated photo URLs. A stable inventory ID is now populated in the existing SKU column. Formula-like text is escaped for spreadsheet safety.
 
+### Background batches
+
+Use the inventory checkboxes or **Select visible** to select up to 100 cards, then choose **Identify selected** or **Upload selected photos**. Save unsaved edits first. Identification sends the selected photos to OpenAI and replaces extracted fields; upload sends them to Cloudinary. Selecting incomplete cards is allowed for processing, while **Export selected CSV** remains disabled until every selected card meets its checklist.
+
+One batch runs at a time, processing cards sequentially. Its progress panel shows finished and failed counts and stays available after refreshing the page. You can browse and edit other, unqueued cards while it runs. Polling preserves unsaved edits. Queued/in-flight cards reject edits, pairing changes and duplicate processing; finished cards become editable again. Individual failures do not stop the remaining batch.
+
+**Cancel batch** finishes the current card and skips the remaining cards. It cannot undo an API call already sent. Completed fields and upload URLs stay saved, while unstarted cards return to their prior states. The panel records cancelled/completed/interrupted status; the latest 20 batch records are available through the local API, and the UI displays the latest one. To retry, filter the inventory for failed cards or select unfinished cards and start another batch.
+
+On shutdown, the worker stops before starting another card. A hard shutdown may interrupt an in-flight call; startup marks that card failed, restores unstarted cards, and records the batch as interrupted. Work is never automatically resubmitted or charged again after restart. Jobs and reservations use the existing SQLite database; adding the jobs table is automatic and preserves existing inventory.
+
 Export status records file generation, not confirmed Seller Hub import. Repeat export is allowed for recovery; importing twice can create duplicate eBay drafts. No eBay credentials or publishing API are used.
 
 ## Persistence and recovery
 
-Inventory fields, photo references, extraction results, token usage, warnings, successful upload URLs and states persist in `data/inventory.sqlite3`. States are imported, processing, needs_review, ready, failed, exported. Restart converts interrupted processing into a retryable failed state. Failed requests retain fields and photos. The single server serializes inventory changes and rejects edits while a card is processing. API/network timeouts are bounded; OpenAI retries connection errors, rate limits and transient server errors, while Cloudinary retries network failures, 429 and server errors up to three attempts. A crash after a remote upload succeeds but before its URL is saved may create an orphan hosted image on retry.
+Inventory fields, photo references, extraction results, token usage, warnings, successful upload URLs, batch progress and states persist in `data/inventory.sqlite3`. Card states are imported, queued, processing, needs_review, ready, failed, exported. Restart converts interrupted processing into a retryable failed state. Failed requests retain fields and photos. The single server serializes inventory changes and rejects edits while a card is queued or processing. API/network timeouts are bounded; OpenAI retries connection errors, rate limits and transient server errors, while Cloudinary retries network failures, 429 and server errors up to three attempts. A crash after a remote upload succeeds but before its URL is saved may create an orphan hosted image on retry.
 
 Back up the entire `data` folder with the app stopped; keep the database and photos together. `LISTER_DATA_DIR` may point to another local folder. No automated cleanup, schema migrations, deletion UI, or legacy inventory migration is included yet. Never delete `data` to troubleshoot without a backup. Avoid concurrent instances on the same data folder.
 
@@ -46,4 +56,4 @@ The original `ebay_draft_lister.py` remains unchanged as a legacy reference; it 
 
 ## Next steps beyond this foundation
 
-Native Windows packaging; background batch queue with cancellation/progress; configurable shop description templates; better searchable inventory and audit history; legacy sidecar import; automated pairing suggestions; dependency update/CI automation; real-account integration checks. There is no automatic pricing or sold-comps service planned into this foundation.
+Native Windows packaging; configurable shop description templates; better searchable inventory and audit history; legacy sidecar import; automated pairing suggestions; dependency update/CI automation; real-account integration checks. There is no automatic pricing or sold-comps service planned into this foundation.
