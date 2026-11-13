@@ -1,5 +1,15 @@
 # eBay Draft Lister
 
+## V2 local application
+
+The `feature/openai-v2-ui` branch adds a Windows-first FastAPI + SQLite + React/TypeScript application. Start with [V2 setup and workflow](docs/V2-SETUP.md): run `setup-windows.cmd`, configure `.env`, then run `launch-windows.cmd`.
+
+V2 provides persistent inventory, photo pairing/review, OpenAI structured vision extraction, editable listings, explicit manual pricing, Cloudinary JPEG uploads and compatible eBay draft CSV export. The original script below is preserved as a legacy reference and is not used by v2. Master is unchanged.
+
+See [implementation and validation](docs/V2-IMPLEMENTATION.md) for scope and remaining work, and [the initial UI](docs/v2-ui.png) for a preview.
+
+---
+
 A Python script that turns a folder of raw trading card photos into ready-to-review eBay draft listings — automatically identifying each card, writing an optimized title and description, uploading photos, and producing eBay's official "Create Drafts" CSV format.
 
 Originally built for [Matchday Cards](https://github.com/) and shared with **The Pitch** community of soccer card sellers, but it works for any sports/trading card shop.

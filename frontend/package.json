@@ -1,0 +1,9 @@
+{
+  "name": "ebay-draft-lister-ui",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": { "build": "tsc --noEmit && vite build" },
+  "dependencies": { "react": "^19.0.0", "react-dom": "^19.0.0" },
+  "devDependencies": { "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "typescript": "^5.7.0", "vite": "^6.4.0" }
+}
