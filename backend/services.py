@@ -7,14 +7,45 @@ from contextvars import ContextVar
 from pathlib import Path
 
 import requests
-from openai import OpenAI
-from anthropic import Anthropic
+from openai import OpenAI, APITimeoutError as OpenAITimeout, APIConnectionError as OpenAIConnection
+from anthropic import Anthropic, APITimeoutError as ClaudeTimeout, APIConnectionError as ClaudeConnection
+from pydantic import ValidationError
 from PIL import Image, ImageOps
 import pillow_heif
 from .models import Extraction
 
 pillow_heif.register_heif_opener()
 _configuration = ContextVar('connections', default=None)
+
+
+class UserFacingError(RuntimeError):
+    pass
+
+
+def safe_error(exc):
+    """Give useful next steps without echoing API bodies, tokens or request data."""
+    if isinstance(exc, UserFacingError):
+        return str(exc)
+    if isinstance(exc, (requests.Timeout, OpenAITimeout, ClaudeTimeout)):
+        return 'The service timed out. Saved work is retained; retry this card.'
+    if isinstance(exc, (requests.ConnectionError, OpenAIConnection, ClaudeConnection)):
+        return 'Could not connect to the service. Check your internet connection and retry.'
+    status = getattr(exc, 'status_code', None)
+    if status is None and getattr(exc, 'response', None) is not None:
+        status = exc.response.status_code
+    if status in (401, 403):
+        return 'The service rejected access. Check the selected provider’s API key, account access, or Cloudinary upload preset in Settings.'
+    if status == 404:
+        return 'The requested model or resource was not found. Check the model ID and your account’s access in Settings.'
+    if status == 429:
+        return 'The service rate or usage limit was reached. Check your API credits/limits, wait, then retry.'
+    if status in (400, 422):
+        return 'The service rejected the request. Check model vision/structured-output support and connection settings, or enter this card manually.'
+    if isinstance(status, int) and status >= 500:
+        return 'The service is temporarily unavailable. Wait and retry; saved work is retained.'
+    if isinstance(exc, ValidationError):
+        return 'The AI response did not match the card fields. Retry identification or enter the details manually.'
+    return 'Operation failed. Check configuration/network and retry. Saved fields and photos were retained.'
 
 
 @contextmanager
@@ -53,13 +84,13 @@ def extract(paths):
     if provider == 'claude':
         return extract_claude(paths)
     if provider != 'openai':
-        raise RuntimeError('Choose OpenAI or Claude in Settings')
+        raise UserFacingError('Choose OpenAI or Claude in Settings')
     return extract_openai(paths)
 
 
 def extract_openai(paths):
     if not setting('OPENAI_API_KEY'):
-        raise RuntimeError('Enter your OpenAI API key in Settings')
+        raise UserFacingError('Enter your OpenAI API key in Settings')
     content = [{'type': 'input_text', 'text': PROMPT}]
     for path in paths:
         encoded = base64.b64encode(jpeg(path, vision=True)).decode()
@@ -69,13 +100,13 @@ def extract_openai(paths):
             model=setting('OPENAI_MODEL', 'gpt-4.1-mini'), store=False,
             input=[{'role': 'user', 'content': content}], text_format=Extraction)
     if response.output_parsed is None:
-        raise RuntimeError('Extraction refused or incomplete; retry or enter fields manually')
+        raise UserFacingError('Extraction refused or incomplete; retry or enter fields manually')
     return response.output_parsed.model_dump(), response.usage.model_dump() if response.usage else {}
 
 
 def extract_claude(paths):
     if not setting('ANTHROPIC_API_KEY'):
-        raise RuntimeError('Enter your Claude (Anthropic) API key in Settings')
+        raise UserFacingError('Enter your Claude (Anthropic) API key in Settings')
     content = [{'type': 'text', 'text': PROMPT}]
     for path in paths:
         encoded = base64.b64encode(jpeg(path, vision=True)).decode()
@@ -85,7 +116,7 @@ def extract_claude(paths):
             model=setting('ANTHROPIC_MODEL', 'claude-sonnet-4-6'), max_tokens=2048,
             messages=[{'role': 'user', 'content': content}], output_format=Extraction)
     if response.stop_reason != 'end_turn' or response.parsed_output is None:
-        raise RuntimeError('Claude extraction refused or incomplete; retry or enter fields manually')
+        raise UserFacingError('Claude extraction refused or incomplete; retry or enter fields manually')
     return response.parsed_output.model_dump(), response.usage.model_dump() if response.usage else {}
 
 
@@ -93,7 +124,7 @@ def upload(path):
     cloud = setting('CLOUDINARY_CLOUD_NAME')
     preset = setting('CLOUDINARY_UPLOAD_PRESET')
     if not cloud or not preset:
-        raise RuntimeError('Configure Cloudinary in .env and restart')
+        raise UserFacingError('Enter your Cloudinary cloud name and upload preset in Settings')
     payload = jpeg(path)
     for attempt in range(3):
         try:

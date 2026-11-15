@@ -111,6 +111,31 @@ def test_move_failure_can_be_retried(inventory, monkeypatch):
     assert len(list((source / 'Done').iterdir())) == 2
 
 
+def test_archive_retry_does_not_create_another_csv(inventory, monkeypatch):
+    from backend import archive
+    client, source, data, card = inventory
+    actual = archive.move_no_replace
+    def fail(source, target): raise PermissionError('locked')
+    monkeypatch.setattr(archive, 'move_no_replace', fail)
+    first = export(client, card)
+    assert first.headers['X-Archive-Warnings'] == '2'
+    before = list((data / 'exports').iterdir())
+    monkeypatch.setattr(archive, 'move_no_replace', actual)
+    response = client.post(f"/api/cards/{card['id']}/retry-archive")
+    assert response.status_code == 200 and response.json()['archive_warnings'] == []
+    assert response.json()['last_export_id'] == first.headers['X-Export-ID']
+    assert list((data / 'exports').iterdir()) == before
+    assert len(list((source / 'Done').iterdir())) == 2
+    assert client.post(f"/api/cards/{card['id']}/retry-archive").status_code == 200
+    assert list((data / 'exports').iterdir()) == before
+
+
+def test_archive_retry_requires_saved_export(inventory):
+    client, source, _, card = inventory
+    assert client.post(f"/api/cards/{card['id']}/retry-archive").status_code == 409
+    assert (source / 'Card_front.jpg').is_file()
+
+
 def test_crash_after_rename_is_recovered_without_duplicate(inventory, monkeypatch):
     from backend import archive
     client, source, data, card = inventory

@@ -192,10 +192,10 @@ def create_app(data_dir=None):
         return result
 
     @app.get('/api/photos/{name}')
-    def photo(name: str):
+    def photo(name: str, full: bool = False):
         if Path(name).name != name or not (photos / name).is_file():
             raise HTTPException(404)
-        return Response(services.jpeg(photos / name, vision=True), media_type='image/jpeg')
+        return Response(services.jpeg(photos / name, vision=not full), media_type='image/jpeg')
 
     @app.put('/api/cards/{ident}')
     def edit(ident: str, listing: Listing):
@@ -237,6 +237,22 @@ def create_app(data_dir=None):
                 for item in (card, back):
                     conn.execute('INSERT OR REPLACE INTO cards VALUES (?,?)', (item['id'], json.dumps(item)))
             return decorate(card)
+
+    @app.post('/api/cards/{ident}/retry-archive')
+    def retry_archive(ident: str):
+        if not sync_lock.acquire(blocking=False):
+            raise HTTPException(409, 'Wait for folder sync to finish before retrying archive')
+        try:
+            with lock:
+                card = read(ident)
+                export_id = card.get('last_export_id', '')
+                if card['state'] != 'exported' or not export_id or not (root / 'exports' / f'{export_id}.csv').is_file():
+                    raise HTTPException(409, 'Only an exported card with a saved CSV can retry its photo archive')
+                archive_card(card, connect)
+                save(card)
+                return decorate(card)
+        finally:
+            sync_lock.release()
 
     @app.post('/api/cards/{ident}/{operation}')
     def process(ident: str, operation: str):
@@ -285,8 +301,8 @@ def create_app(data_dir=None):
                             card[side + '_url'] = services.upload(photos / card[side])
                         save(card)  # Retain successful front upload when back fails.
             card['state'] = 'ready' if not issues(card) else 'needs_review'
-        except Exception:
-            card.update(state='failed', error='Operation failed. Check configuration/network and retry. Saved fields and photos were retained.')
+        except Exception as exc:
+            card.update(state='failed', error=services.safe_error(exc))
         with lock:
             save(card)
         return decorate(card)
