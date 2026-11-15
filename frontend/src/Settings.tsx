@@ -1,0 +1,15 @@
+import { useState } from 'react';
+
+export type Config = {openai:boolean;cloudinary:boolean;model:string;cloud_name:string;source_folder:string};
+export function Settings({config,onSave,onClose}:{config:Config;onSave:(changes:unknown)=>Promise<void>;onClose:()=>void}) {
+  const [folder,setFolder]=useState(config.source_folder),[model,setModel]=useState(config.model);
+  const [key,setKey]=useState(''),[cloud,setCloud]=useState(config.cloud_name),[preset,setPreset]=useState('');
+  const [saving,setSaving]=useState(false),[error,setError]=useState('');
+  const [clearKey,setClearKey]=useState(false),[clearCloud,setClearCloud]=useState(false);
+  return <div className="settings-backdrop"><section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title"><h2 id="settings-title">Settings & connections</h2><p>Saved on this computer. Changes apply immediately.</p><form onSubmit={async e=>{e.preventDefault();setSaving(true);setError('');try{await onSave({source_folder:folder,model,api_key:key,cloud_name:cloud,upload_preset:preset,clear_api_key:clearKey,clear_cloudinary:clearCloud});onClose();}catch(e){setError(e instanceof Error?e.message:'Could not save settings');}finally{setSaving(false);}}}><fieldset disabled={saving}>
+    <label>Photo source folder<input autoFocus required value={folder} onChange={e=>setFolder(e.target.value)}/></label><small>Sync reads images directly inside this folder. Subfolders, including Done and Needs Review, are left alone.</small>
+    <h3>OpenAI identification</h3><label>OpenAI API key<input type="password" autoComplete="new-password" value={key} placeholder={config.openai?'Key saved · leave blank to keep':'Paste your OpenAI API key'} onChange={e=>setKey(e.target.value)}/></label><label>Vision model<input required value={model} onChange={e=>setModel(e.target.value)}/></label><label className="review-check"><input type="checkbox" checked={clearKey} onChange={e=>setClearKey(e.target.checked)}/>Remove saved OpenAI key</label>
+    <h3>Cloudinary photo hosting</h3><label>Cloud name<input value={cloud} onChange={e=>setCloud(e.target.value)}/></label><label>Unsigned upload preset<input type="password" autoComplete="new-password" value={preset} placeholder={config.cloudinary?'Preset saved · leave blank to keep':'Your unsigned upload preset'} onChange={e=>setPreset(e.target.value)}/></label><label className="review-check"><input type="checkbox" checked={clearCloud} onChange={e=>setClearCloud(e.target.checked)}/>Remove saved Cloudinary connection</label>
+    <p className="muted">Credentials are encrypted for your Windows account. Saved keys are never sent back to this screen. Identification and photo hosting send photos to their respective services only when you start those actions.</p>{error&&<p role="alert" className="notice">{error}</p>}<div className="actions"><button className="primary" type="submit">{saving?'Saving…':'Save settings'}</button><button type="button" onClick={onClose}>Close</button></div>
+  </fieldset></form></section></div>;
+}

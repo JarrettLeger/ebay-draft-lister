@@ -12,13 +12,16 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from . import services
 from .compat import HEADER_ROW, INFO_ROWS, build_title
 from .models import Listing, issues
+from .settings import Settings
+from .folder_sync import sync_folder
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / '.env')
@@ -33,6 +36,8 @@ def create_app(data_dir=None):
     lock = threading.RLock()
     stopping = threading.Event()
     worker = None
+    settings = Settings(root)
+    sync_lock = threading.Lock()
 
     def connect():
         connection = sqlite3.connect(db, timeout=30)
@@ -42,6 +47,7 @@ def create_app(data_dir=None):
     with connect() as conn:
         conn.execute('CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
         conn.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+        conn.execute('CREATE TABLE IF NOT EXISTS sync_sources (source TEXT, digest TEXT, photo TEXT, PRIMARY KEY(source,digest))')
         for ident, payload in conn.execute('SELECT id,payload FROM jobs').fetchall():
             job = json.loads(payload)
             if job['state'] in ('running', 'cancelling'):
@@ -80,6 +86,12 @@ def create_app(data_dir=None):
 
     app = FastAPI(title='eBay Draft Lister v2', lifespan=lifespan)
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, exc):
+        # Validation failures must not echo submitted credentials.
+        return JSONResponse(status_code=422, content={'detail': [
+            {key: error[key] for key in ('loc', 'msg', 'type')} for error in exc.errors()]})
+
     def unavailable(card):
         return card['state'] in ('processing', 'queued')
 
@@ -89,14 +101,50 @@ def create_app(data_dir=None):
         origin = request.headers.get('origin')
         if host not in ('127.0.0.1', 'localhost', 'testserver'):
             return Response('Invalid host', 403)
-        if origin and origin not in ('http://127.0.0.1:8765', 'http://localhost:8765'):
+        if origin and origin != f"http://{request.headers.get('host', '')}":
             return Response('Invalid origin', 403)
         return await call_next(request)
 
     @app.get('/api/config')
     def config():
-        return {'openai': bool(os.getenv('OPENAI_API_KEY')), 'model': os.getenv('OPENAI_MODEL', 'gpt-4.1-mini'),
-                'cloudinary': bool(os.getenv('CLOUDINARY_CLOUD_NAME') and os.getenv('CLOUDINARY_UPLOAD_PRESET'))}
+        return settings.public()
+
+    class Preferences(BaseModel):
+        source_folder: str | None = Field(default=None, min_length=1, max_length=2048)
+        model: str | None = Field(default=None, min_length=1, max_length=120)
+        api_key: str | None = Field(default=None, max_length=1024)
+        cloud_name: str | None = Field(default=None, max_length=120)
+        upload_preset: str | None = Field(default=None, max_length=250)
+        clear_api_key: bool = False
+        clear_cloudinary: bool = False
+
+        @field_validator('source_folder', 'model')
+        @classmethod
+        def nonempty(cls, value):
+            if value is not None and not value.strip():
+                raise ValueError('Enter a nonempty value')
+            return value.strip() if value else value
+
+    @app.put('/api/config')
+    def update_config(body: Preferences):
+        try:
+            return settings.update(body.model_dump())
+        except RuntimeError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    class Sync(BaseModel):
+        pairing: Literal['consecutive', 'named', 'none'] = 'consecutive'
+
+    @app.post('/api/sync')
+    def sync(body: Sync):
+        if not sync_lock.acquire(blocking=False):
+            raise HTTPException(409, 'Folder sync is already running')
+        try:
+            return sync_folder(settings.public()['source_folder'], body.pairing, photos, connect, lock)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(400, str(exc) if isinstance(exc, ValueError) else 'Cannot access the source folder') from exc
+        finally:
+            sync_lock.release()
 
     @app.get('/api/cards')
     def cards():
@@ -163,7 +211,7 @@ def create_app(data_dir=None):
             card, back = read(ident), read(body.back_id)
             if ident == body.back_id or card['back'] or back['back'] or any(c['state'] != 'imported' for c in (card, back)):
                 raise HTTPException(409, 'Pair two unprocessed single photos')
-            card.update(back=back['front'], state='needs_review')
+            card.update(back=back['front'], back_original=back['original'], state='needs_review')
             with connect() as conn:
                 conn.execute('UPDATE cards SET payload=? WHERE id=?', (json.dumps(card), ident))
                 conn.execute('DELETE FROM cards WHERE id=?', (body.back_id,))
@@ -175,7 +223,7 @@ def create_app(data_dir=None):
             card = read(ident)
             if not card['back'] or unavailable(card):
                 raise HTTPException(409, 'No removable back photo')
-            back = dict(id=uuid4().hex, front=card['back'], back=None, original='Separated back photo',
+            back = dict(id=uuid4().hex, front=card['back'], back=None, original=card.get('back_original', 'Separated back photo'),
                 front_url=None, back_url=None, listing=Listing().model_dump(mode='json'), state='imported', warnings=[], error=None, usage={})
             card.update(back=None, front_url=None, back_url=None, state='imported', warnings=[])
             card['listing']['reviewed'] = False
@@ -199,6 +247,7 @@ def create_app(data_dir=None):
                 if not card['back']:
                     raise HTTPException(400, 'No back photo')
                 card['front'], card['back'] = card['back'], card['front']
+                card['original'], card['back_original'] = card.get('back_original', 'Back photo'), card['original']
                 card['front_url'], card['back_url'] = card['back_url'], card['front_url']
                 card['listing']['reviewed'] = False
                 card['state'] = 'needs_review'
@@ -211,7 +260,8 @@ def create_app(data_dir=None):
             save(card)
         try:
             if operation == 'extract':
-                fields, usage = services.extract([photos / card[k] for k in ('front', 'back') if card[k]])
+                with services.configuration(settings.runtime()):
+                    fields, usage = services.extract([photos / card[k] for k in ('front', 'back') if card[k]])
                 card['usage'] = usage
                 card['warnings'] = fields.pop('warnings')
                 if fields.pop('images_match') is False:
@@ -222,7 +272,8 @@ def create_app(data_dir=None):
             else:
                 for side in ('front', 'back'):
                     if card[side] and not card[side + '_url']:
-                        card[side + '_url'] = services.upload(photos / card[side])
+                        with services.configuration(settings.runtime()):
+                            card[side + '_url'] = services.upload(photos / card[side])
                         save(card)  # Retain successful front upload when back fails.
             card['state'] = 'ready' if not issues(card) else 'needs_review'
         except Exception:
@@ -287,7 +338,7 @@ def create_app(data_dir=None):
                     conn.execute('UPDATE jobs SET payload=? WHERE id=?', (json.dumps(job), ident))
 
     class Batch(BaseModel):
-        ids: list[str] = Field(min_length=1, max_length=100)
+        ids: list[str] = Field(min_length=1)
         operation: Literal['extract', 'upload']
 
     @app.get('/api/jobs')
@@ -305,8 +356,8 @@ def create_app(data_dir=None):
             if any(unavailable(card) for card in selected):
                 raise HTTPException(409, 'One or more cards are already queued or processing')
             required = ('OPENAI_API_KEY',) if body.operation == 'extract' else ('CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_UPLOAD_PRESET')
-            if any(not os.getenv(key) for key in required):
-                raise HTTPException(400, 'Configure the connection in .env and restart before starting this batch')
+            if any(not settings.runtime().get(key) for key in required):
+                raise HTTPException(400, 'Configure the connection in Settings before starting this batch')
             job = dict(id=uuid4().hex, operation=body.operation, ids=[c['id'] for c in selected],
                 state='running', completed=0, failed=0, current=None, results=[],
                 created_at=datetime.now(timezone.utc).isoformat())

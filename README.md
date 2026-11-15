@@ -8,6 +8,8 @@ V2 provides persistent inventory, photo pairing/review, OpenAI structured vision
 
 Background batches now identify or upload selected cards with saved progress, cancellation and restart recovery. Cards still require manual review and pricing before export.
 
+Use **Sync folder** to pull photos from `Z:\Match Day Cards\eBay` without the 100-photo selection limit, skip already synced files, and suggest front/back pairs. **Settings & connections** lets you change the folder and save your API connections with Windows encryption.
+
 See [implementation and validation](docs/V2-IMPLEMENTATION.md) for scope and remaining work, and [the initial UI](docs/v2-ui.png) for a preview.
 
 ---
