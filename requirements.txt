@@ -4,6 +4,7 @@ python-multipart>=0.0.20,<1
 pydantic>=2.10,<3
 python-dotenv>=1,<2
 openai>=2,<3
+anthropic>=1,<2
 requests>=2.32,<3
 pillow>=11,<13
 pillow-heif>=0.22,<2

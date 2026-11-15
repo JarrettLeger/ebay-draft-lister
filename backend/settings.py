@@ -7,7 +7,8 @@ from pathlib import Path
 from threading import RLock
 
 DEFAULT_FOLDER = r'Z:\Match Day Cards\eBay'
-FIELDS = ('OPENAI_API_KEY', 'OPENAI_MODEL', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_UPLOAD_PRESET')
+FIELDS = ('OPENAI_API_KEY', 'OPENAI_MODEL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL',
+          'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_UPLOAD_PRESET')
 
 
 def protect(value, decrypt=False):
@@ -44,11 +45,19 @@ class Settings:
             for key, value in self.values.get('connections', {}).items():
                 result[key] = protect(value, decrypt=True) if value else ''
             result['OPENAI_MODEL'] = self.values.get('model', result['OPENAI_MODEL'] or 'gpt-4.1-mini')
+            result['ANTHROPIC_MODEL'] = self.values.get('claude_model', result['ANTHROPIC_MODEL'] or 'claude-sonnet-4-6')
+            result['LISTER_AI_PROVIDER'] = self.values.get('provider', os.getenv('LISTER_AI_PROVIDER', 'openai'))
+            if result['LISTER_AI_PROVIDER'] not in ('openai', 'claude'):
+                raise RuntimeError('Choose OpenAI or Claude as the identification provider')
             return result
 
     def public(self):
         config = self.runtime()
-        return dict(openai=bool(config['OPENAI_API_KEY']), model=config['OPENAI_MODEL'],
+        provider = config['LISTER_AI_PROVIDER']
+        return dict(openai=bool(config['OPENAI_API_KEY']), claude=bool(config['ANTHROPIC_API_KEY']),
+            provider=provider, ready=bool(config['ANTHROPIC_API_KEY'] if provider == 'claude' else config['OPENAI_API_KEY']),
+            model=config['ANTHROPIC_MODEL'] if provider == 'claude' else config['OPENAI_MODEL'],
+            openai_model=config['OPENAI_MODEL'], claude_model=config['ANTHROPIC_MODEL'],
             cloudinary=bool(config['CLOUDINARY_CLOUD_NAME'] and config['CLOUDINARY_UPLOAD_PRESET']),
             cloud_name=config['CLOUDINARY_CLOUD_NAME'],
             source_folder=self.values.get('source_folder', DEFAULT_FOLDER))
@@ -56,16 +65,19 @@ class Settings:
     def update(self, changes):
         with self.lock:
             values = json.loads(json.dumps(self.values))
-            for key in ('source_folder', 'model'):
+            for key in ('source_folder', 'model', 'claude_model', 'provider'):
                 if changes.get(key) is not None:
                     values[key] = changes[key].strip()
             connections = values.setdefault('connections', {})
-            for name, key in (('api_key', 'OPENAI_API_KEY'), ('cloud_name', 'CLOUDINARY_CLOUD_NAME'), ('upload_preset', 'CLOUDINARY_UPLOAD_PRESET')):
+            for name, key in (('api_key', 'OPENAI_API_KEY'), ('claude_api_key', 'ANTHROPIC_API_KEY'),
+                              ('cloud_name', 'CLOUDINARY_CLOUD_NAME'), ('upload_preset', 'CLOUDINARY_UPLOAD_PRESET')):
                 value = changes.get(name)
                 if value is not None and value.strip():
                     connections[key] = protect(value.strip())
             if changes.get('clear_api_key'):
                 connections['OPENAI_API_KEY'] = ''
+            if changes.get('clear_claude_api_key'):
+                connections['ANTHROPIC_API_KEY'] = ''
             if changes.get('clear_cloudinary'):
                 connections['CLOUDINARY_CLOUD_NAME'] = connections['CLOUDINARY_UPLOAD_PRESET'] = ''
             temporary = self.path.with_suffix('.tmp')

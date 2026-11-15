@@ -112,13 +112,17 @@ def create_app(data_dir=None):
     class Preferences(BaseModel):
         source_folder: str | None = Field(default=None, min_length=1, max_length=2048)
         model: str | None = Field(default=None, min_length=1, max_length=120)
+        provider: Literal['openai', 'claude'] | None = None
+        claude_model: str | None = Field(default=None, min_length=1, max_length=120)
         api_key: str | None = Field(default=None, max_length=1024)
+        claude_api_key: str | None = Field(default=None, max_length=1024)
         cloud_name: str | None = Field(default=None, max_length=120)
         upload_preset: str | None = Field(default=None, max_length=250)
         clear_api_key: bool = False
+        clear_claude_api_key: bool = False
         clear_cloudinary: bool = False
 
-        @field_validator('source_folder', 'model')
+        @field_validator('source_folder', 'model', 'claude_model')
         @classmethod
         def nonempty(cls, value):
             if value is not None and not value.strip():
@@ -236,7 +240,7 @@ def create_app(data_dir=None):
     def process(ident: str, operation: str):
         return process_card(ident, operation)
 
-    def process_card(ident, operation, job_id=None):
+    def process_card(ident, operation, job_id=None, connection_values=None):
         if operation not in ('extract', 'upload', 'swap'):
             raise HTTPException(404)
         with lock:
@@ -260,9 +264,12 @@ def create_app(data_dir=None):
             save(card)
         try:
             if operation == 'extract':
-                with services.configuration(settings.runtime()):
+                chosen = connection_values or settings.runtime()
+                with services.configuration(chosen):
                     fields, usage = services.extract([photos / card[k] for k in ('front', 'back') if card[k]])
                 card['usage'] = usage
+                card['extraction_provider'] = chosen['LISTER_AI_PROVIDER']
+                card['extraction_model'] = chosen['ANTHROPIC_MODEL'] if chosen['LISTER_AI_PROVIDER'] == 'claude' else chosen['OPENAI_MODEL']
                 card['warnings'] = fields.pop('warnings')
                 if fields.pop('images_match') is False:
                     card['warnings'].append('Front/back may not match; inspect pairing')
@@ -293,7 +300,7 @@ def create_app(data_dir=None):
         with connect() as conn:
             conn.execute('INSERT OR REPLACE INTO jobs VALUES (?,?)', (job['id'], json.dumps(job)))
 
-    def run_batch(ident):
+    def run_batch(ident, connection_values):
         try:
             for card_id in read_job(ident)['ids']:
                 with lock:
@@ -302,7 +309,7 @@ def create_app(data_dir=None):
                         break
                     job['current'] = card_id
                     save_job(job)
-                result = process_card(card_id, job['operation'], ident)
+                result = process_card(card_id, job['operation'], ident, connection_values)
                 with lock:
                     job = read_job(ident)
                     finished = read(card_id)
@@ -355,18 +362,22 @@ def create_app(data_dir=None):
             selected = [read(ident) for ident in dict.fromkeys(body.ids)]
             if any(unavailable(card) for card in selected):
                 raise HTTPException(409, 'One or more cards are already queued or processing')
-            required = ('OPENAI_API_KEY',) if body.operation == 'extract' else ('CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_UPLOAD_PRESET')
-            if any(not settings.runtime().get(key) for key in required):
+            connections = settings.runtime()
+            provider = connections['LISTER_AI_PROVIDER']
+            required = (('ANTHROPIC_API_KEY' if provider == 'claude' else 'OPENAI_API_KEY'),) if body.operation == 'extract' else ('CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_UPLOAD_PRESET')
+            if any(not connections.get(key) for key in required):
                 raise HTTPException(400, 'Configure the connection in Settings before starting this batch')
             job = dict(id=uuid4().hex, operation=body.operation, ids=[c['id'] for c in selected],
                 state='running', completed=0, failed=0, current=None, results=[],
                 created_at=datetime.now(timezone.utc).isoformat())
+            if body.operation == 'extract':
+                job.update(provider=provider, model=connections['ANTHROPIC_MODEL'] if provider == 'claude' else connections['OPENAI_MODEL'])
             with connect() as conn:
                 for card in selected:
                     card.update(before_queue=card['state'], state='queued', job_id=job['id'])
                     conn.execute('UPDATE cards SET payload=? WHERE id=?', (json.dumps(card), card['id']))
                 conn.execute('INSERT INTO jobs VALUES (?,?)', (job['id'], json.dumps(job)))
-            worker = threading.Thread(target=run_batch, args=(job['id'],), daemon=True)
+            worker = threading.Thread(target=run_batch, args=(job['id'], connections), daemon=True)
             worker.start()
             return job
 
