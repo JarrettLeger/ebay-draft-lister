@@ -6,7 +6,7 @@ The `feature/openai-v2-ui` branch adds a Windows-first FastAPI + SQLite + React/
 
 V2 provides persistent inventory, photo pairing/review, OpenAI or Claude structured vision extraction, editable listings, explicit manual pricing, Cloudinary JPEG uploads and compatible eBay draft CSV export. The original script below is preserved as a legacy reference and is not used by v2. Master is unchanged.
 
-Background batches now identify or upload selected cards with saved progress, cancellation and restart recovery. Cards still require manual review and pricing before export.
+Background batches now identify or upload selected cards with saved progress, cancellation and restart recovery. Successful CSV export saves a recovery copy, then renames the exported cards’ synced originals and moves them into their source folder’s `Done` directory. Cards still require manual review and pricing before export.
 
 Use **Sync folder** to pull photos from `Z:\Match Day Cards\eBay` without the 100-photo selection limit, skip already synced files, and suggest front/back pairs. **Settings & connections** lets you change the folder, choose OpenAI or Claude, and save separate API keys and model settings with Windows encryption.
 

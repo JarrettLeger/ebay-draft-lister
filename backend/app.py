@@ -13,7 +13,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,6 +22,7 @@ from .compat import HEADER_ROW, INFO_ROWS, build_title
 from .models import Listing, issues
 from .settings import Settings
 from .folder_sync import sync_folder
+from .archive import archive_card
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / '.env')
@@ -48,6 +49,7 @@ def create_app(data_dir=None):
         conn.execute('CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
         conn.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
         conn.execute('CREATE TABLE IF NOT EXISTS sync_sources (source TEXT, digest TEXT, photo TEXT, PRIMARY KEY(source,digest))')
+        conn.execute('CREATE TABLE IF NOT EXISTS photo_archives (photo TEXT PRIMARY KEY, payload TEXT NOT NULL)')
         for ident, payload in conn.execute('SELECT id,payload FROM jobs').fetchall():
             job = json.loads(payload)
             if job['state'] in ('running', 'cancelling'):
@@ -395,6 +397,15 @@ def create_app(data_dir=None):
 
     @app.post('/api/export')
     def export(body: Export):
+        # Do not let sync reimport a file in between export and its archive move.
+        if not sync_lock.acquire(blocking=False):
+            raise HTTPException(409, 'Wait for folder sync to finish before exporting')
+        try:
+            return export_cards(body)
+        finally:
+            sync_lock.release()
+
+    def export_cards(body):
         with lock:
             selected = [read(ident) for ident in dict.fromkeys(body.ids)]
             if not selected or any(issues(c) or unavailable(c) for c in selected):
@@ -410,10 +421,34 @@ def create_app(data_dir=None):
                 writer.writerow(['Draft', card['id'], item['category_id'], safe(item['title']), '',
                     f"{float(item['price']):.2f}", '1', '|'.join(card[s + '_url'] for s in ('front', 'back') if card[s + '_url']),
                     item['condition_id'], safe(item['description']), 'FixedPrice'])
+            export_id = uuid4().hex
+            export_dir = root / 'exports'
+            export_dir.mkdir(exist_ok=True)
+            saved_csv = export_dir / f'{export_id}.csv'
+            # Persist the complete CSV before any original photo is renamed or moved.
+            with saved_csv.open('x', encoding='utf-8', newline='') as output:
+                output.write(stream.getvalue())
+                output.flush()
+                os.fsync(output.fileno())
+            archive_warning_count = 0
             for card in selected:
                 card['state'] = 'exported'
+                card['last_export_id'] = export_id
                 save(card)
-        return Response(stream.getvalue(), media_type='text/csv', headers={'Content-Disposition': 'attachment; filename="eBay_Drafts.csv"'})
+                archive_warning_count += len(archive_card(card, connect))
+                save(card)
+        return Response(stream.getvalue(), media_type='text/csv', headers={
+            'Content-Disposition': 'attachment; filename="eBay_Drafts.csv"',
+            'X-Export-ID': export_id, 'X-Archive-Warnings': str(archive_warning_count)})
+
+    @app.get('/api/exports/{export_id}')
+    def download_export(export_id: str):
+        if len(export_id) != 32 or any(c not in '0123456789abcdef' for c in export_id):
+            raise HTTPException(404)
+        path = root / 'exports' / f'{export_id}.csv'
+        if not path.is_file():
+            raise HTTPException(404)
+        return FileResponse(path, media_type='text/csv', filename=f'eBay_Drafts_{export_id[:8]}.csv')
 
     dist = ROOT / 'frontend' / 'dist'
     if dist.exists():

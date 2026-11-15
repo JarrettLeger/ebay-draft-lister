@@ -49,6 +49,18 @@ One batch runs at a time, processing cards sequentially. Its progress panel show
 
 On shutdown, the worker stops before starting another card. A hard shutdown may interrupt an in-flight call; startup marks that card failed, restores unstarted cards, and records the batch as interrupted. Work is never automatically resubmitted or charged again after restart. Jobs and reservations use the existing SQLite database; adding the jobs table is automatic and preserves existing inventory.
 
+### Renaming and moving exported photos
+
+After you finalize and export selected cards, the app first saves the complete eBay CSV in `data/exports/<export-id>.csv`. Only after that succeeds does it rename the original synced photos and move them into a `Done` folder alongside those originals. For your default source, this is `Z:\Match Day Cards\eBay\Done`.
+
+Names include the player, year, set, a stable card ID suffix and side, for example `Jane_Player_2024_Test_Set_a1b2c3d4_front.jpg` and `_back.jpg`. Original photo bytes and file formats are preserved: HEIC originals retain `.heic`; hosted listing photos remain JPEG. Collisions receive a numeric suffix, and existing files are never overwritten. The copied inventory photos stay intact so previews and recovery continue to work.
+
+Only cards included in the successfully generated CSV are archived. Failed/incomplete or unselected cards stay where they are. The app checks each original against the imported content before moving; changed photos are left untouched with a warning. It uses the source location recorded during sync, even if you later change the configured source folder. Picker-only photos have no reliable original path, so sync their source folder first if you want originals archived automatically.
+
+If the network drive is disconnected, a photo is locked, missing or changed, or another move fails, the CSV is still available. The export summary and card’s **Export & photo archive** section show warnings. Export again to retry failed archive moves; successfully moved photos are not moved again. A journal recovers a rename completed just before an interruption. Exporting again generates another CSV, so avoid uploading duplicate drafts to eBay.
+
+Each exported card has **Download saved CSV**, which recovers its last export without creating another export or moving more files. This also covers a failed browser download after the server has saved the CSV and moved the photos. Back up `data/exports` with the rest of `data`. “Done” means a CSV was generated, not that eBay accepted or published the listing. Tests used generated temporary photos only; real source files were not moved during development.
+
 Export status records file generation, not confirmed Seller Hub import. Repeat export is allowed for recovery; importing twice can create duplicate eBay drafts. No eBay credentials or publishing API are used.
 
 ## Persistence and recovery
