@@ -10,6 +10,8 @@ Background batches now identify or upload selected cards with saved progress, ca
 
 Use **Sync folder** to pull photos from `Z:\Match Day Cards\eBay` without the 100-photo selection limit, skip already synced files, and suggest front/back pairs. **Settings & connections** lets you change the folder, choose OpenAI or Claude, and save separate API keys and model settings with Windows encryption.
 
+New identifications generate buyer-friendly card descriptions with detail bullets and a condition-photo reminder. Existing cards can use **Generate description** with a live preview and no additional API charge; CSV export preserves the paragraph/bullet layout.
+
 Review tools include inventory search, checklist filters, photo enlargement, Save & next, safer error messages and archive retry without creating another CSV.
 
 See [implementation and validation](docs/V2-IMPLEMENTATION.md) for scope and remaining work, and [the initial UI](docs/v2-ui.png) for a preview.

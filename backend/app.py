@@ -23,6 +23,7 @@ from .models import Listing, issues
 from .settings import Settings
 from .folder_sync import sync_folder
 from .archive import archive_card
+from .descriptions import build_description, description_html
 
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / '.env')
@@ -157,6 +158,11 @@ def create_app(data_dir=None):
     def cards():
         with connect() as conn:
             return [decorate(json.loads(row[0])) for row in conn.execute('SELECT payload FROM cards ORDER BY rowid DESC')]
+
+    @app.post('/api/description')
+    def generate_description(listing: Listing):
+        # Preview only: never save or clear a card's manual edits implicitly.
+        return {'description': build_description(listing.model_dump())}
 
     @app.post('/api/import')
     def import_photos(files: list[UploadFile] = File(...)):
@@ -294,7 +300,7 @@ def create_app(data_dir=None):
                     card['warnings'].append('Front/back may not match; inspect pairing')
                 card['listing'].update(fields)
                 card['listing'].update(title=build_title(fields), reviewed=False,
-                    description=f"{fields['player']} — {fields['set_name']}. See photos for condition. Please review all details.")
+                    description=build_description(fields))
             else:
                 for side in ('front', 'back'):
                     if card[side] and not card[side + '_url']:
@@ -437,7 +443,7 @@ def create_app(data_dir=None):
                 item = card['listing']
                 writer.writerow(['Draft', card['id'], item['category_id'], safe(item['title']), '',
                     f"{float(item['price']):.2f}", '1', '|'.join(card[s + '_url'] for s in ('front', 'back') if card[s + '_url']),
-                    item['condition_id'], safe(item['description']), 'FixedPrice'])
+                    item['condition_id'], description_html(item['description']), 'FixedPrice'])
             export_id = uuid4().hex
             export_dir = root / 'exports'
             export_dir.mkdir(exist_ok=True)
