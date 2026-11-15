@@ -27,7 +27,7 @@ Use the inventory checkboxes or **Select visible** to select cards, then choose 
 
 ### Choosing OpenAI or Claude
 
-Open **Settings & connections → Identification provider** and choose **OpenAI** or **Claude (Anthropic)**. Enter the matching API key in that provider’s field and click **Save settings**. Both providers’ keys and model names are stored independently; switching providers does not erase the other connection. Blank key fields keep saved keys, while each remove checkbox clears only its own provider. Existing installations keep OpenAI selected and preserve the previous OpenAI model/key.
+Open **Settings & connections → Identification provider** and choose **OpenAI** or **Claude (Anthropic)**. Enter the matching API key in that provider’s field and click **Save settings**. Only the selected provider’s model field is required; leaving the other model blank preserves its saved value. Both providers’ keys and model names are stored independently; switching providers does not erase the other connection. Blank key fields keep saved keys, while each remove checkbox clears only its own provider. Existing installations keep OpenAI selected and preserve the previous OpenAI model/key.
 
 The default model fields are `gpt-4.1-mini` for OpenAI and `claude-sonnet-4-6` for Claude. You can enter another model ID with vision and structured-output support available to your account. API keys must belong to the selected provider; the app never substitutes the other provider when a key is missing or a request fails. The sidebar and identification buttons name the selected provider. “Configured” means a key is saved, not that it has been verified with the service.
 
