@@ -164,6 +164,24 @@ def create_app(data_dir=None):
         # Preview only: never save or clear a card's manual edits implicitly.
         return {'description': build_description(listing.model_dump())}
 
+    class Descriptions(BaseModel):
+        ids: list[str] = Field(min_length=1)
+
+    @app.post('/api/descriptions')
+    def generate_descriptions(body: Descriptions):
+        with lock:
+            selected = [read(ident) for ident in dict.fromkeys(body.ids)]
+            if any(unavailable(card) or card['state'] == 'exported' for card in selected):
+                raise HTTPException(409, 'Select unexported cards that are not queued or processing')
+            # Validate every selected card before writing; commit all changes together.
+            with connect() as conn:
+                for card in selected:
+                    card['listing']['description'] = build_description(card['listing'])
+                    card['listing']['reviewed'] = False
+                    card['state'] = 'needs_review'
+                    conn.execute('UPDATE cards SET payload=? WHERE id=?', (json.dumps(card), card['id']))
+            return {'updated': len(selected)}
+
     @app.post('/api/import')
     def import_photos(files: list[UploadFile] = File(...)):
         if not 1 <= len(files) <= 100:
