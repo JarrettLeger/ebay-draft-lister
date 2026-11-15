@@ -30,7 +30,9 @@ if errorlevel 1 (
 )
 popd
 if not exist .env copy .env.example .env >nul
-echo Setup complete. Edit .env for optional API connections, then run launch-windows.cmd.
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-shortcut.ps1"
+if errorlevel 1 echo Setup succeeded, but the desktop shortcut could not be created. Use eBay Draft Lister.vbs instead.
+echo Setup complete. Open eBay Draft Lister from your desktop or run launch-windows.cmd.
 pause
 exit /b 0
 :failed

@@ -87,6 +87,7 @@ def create_app(data_dir=None):
         stopping.set()  # In-flight calls finish; no subsequent card starts.
 
     app = FastAPI(title='eBay Draft Lister v2', lifespan=lifespan)
+    app.state.stop_background = stopping.set
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):

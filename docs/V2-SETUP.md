@@ -4,10 +4,24 @@
 
 1. Install Python 3.12+ (include the `py` launcher) and Node.js 22 LTS+ (includes npm).
 2. Download or check out `feature/openai-v2-ui`. Double-click `setup-windows.cmd`. Internet access is required for dependency downloads. Setup creates a project-local Python environment and builds the UI.
-3. Double-click `launch-windows.cmd`. The interface opens at http://127.0.0.1:8765. Open **Settings & connections** to choose OpenAI or Claude and enter its API key, plus your Cloudinary cloud name and unsigned upload preset. Changes apply immediately. Leave connections blank to use sync, pairing and manual editing offline. Keep the preset restricted to image uploads in Cloudinary.
-4. Leave the server window open; press Ctrl+C there to stop. No Node server is needed after setup. Advanced users can still use `.env` or environment variables; saved Settings overrides those values. Restart after manually changing `.env`, and never commit it.
+3. Open **eBay Draft Lister** from the desktop shortcut, or double-click `eBay Draft Lister.vbs` (the existing `launch-windows.cmd` also starts desktop mode). The app opens in its own native Windows window, with no browser tab or command window required. Open **Settings & connections** to choose OpenAI or Claude and enter its API key, plus your Cloudinary cloud name and unsigned upload preset. Changes apply immediately. Leave connections blank to use sync, pairing and manual editing offline. Keep the preset restricted to image uploads in Cloudinary.
+4. Close the app window to stop its local server. Unsaved edits or running work trigger a close warning. No Node server is needed after setup. Advanced users can still use `.env` or environment variables; saved Settings overrides those values. Restart after manually changing `.env`, and never commit it.
 
-This foundation is a desktop-style browser application served on your computer. A native window/installer is not included. Use one server process and one editing tab. It is not a multi-user or remotely hosted service.
+The default launcher is a native Windows window built with pywebview and Microsoft Edge WebView2. It owns the local FastAPI server; your browser is not required. Inventory, source folder, encrypted API keys and recovery CSVs remain in the same existing data folder. No migration or re-import is needed. This is a local single-user application.
+
+Setup installs the desktop component, builds the interface and creates the desktop shortcut with a card icon. Python 3.12+ and the Microsoft Edge WebView2 Evergreen Runtime are required on Windows. The desktop component also uses the Windows .NET Framework runtime. If desktop startup fails, install the missing runtime and rerun setup. See [pywebview’s Windows documentation](https://pywebview.flowrl.com/guide/installation.html).
+
+For an existing installation, finish any running batch and close the old browser server’s command window before opening desktop mode. The launcher reserves its server port before opening inventory and refuses to attach to another running copy. `launch-browser.cmd` remains an explicit browser fallback; keep its command window open while using browser mode. The default desktop launcher does not open a browser automatically.
+
+The desktop shortcut depends on this project folder and its virtual environment; keep the folder in place. Recreate the shortcut with `install-shortcut.ps1` if you relocate the folder. A signed standalone installer/executable distribution is not included in this increment.
+
+## Desktop window behavior
+
+CSV export and recovery downloads open the native Windows **Save As** dialog. Choose a location and save the CSV as usual. The server recovery copy is already saved, so cancelling that dialog does not undo an export or any completed archive moves; use **Download saved CSV** to save it later without creating another export. Photo import uses the native file picker inside the app window. Folder sync still reads your saved source folder directly.
+
+Closing a clean, idle app exits immediately. If unsaved edits, a request or a batch is running, a warning lets you stay in the app. If you proceed, the launcher stops new batch work and shuts down its owned server. In-flight work may be interrupted; restart recovery retains completed work and makes unfinished cards retryable. Finish a sync/export/batch before closing when possible.
+
+Startup errors appear in a Windows message box. Diagnostic logs are rotated in `data/logs/desktop.log` (or the configured data folder’s `logs` directory). The desktop renderer does not expose a Python control bridge to the UI. Downloads are enabled; file-URL navigation and developer tools are disabled by default. Your API credentials remain in the backend’s protected settings, not browser storage.
 
 ## Workflow
 
@@ -98,4 +112,4 @@ The original `ebay_draft_lister.py` remains unchanged as a legacy reference; it 
 
 ## Next steps beyond this foundation
 
-Native Windows packaging; configurable shop description templates; better searchable inventory and audit history; legacy sidecar import; automated pairing suggestions; dependency update/CI automation; real-account integration checks. There is no automatic pricing or sold-comps service planned into this foundation.
+Signed standalone Windows installer; configurable shop description templates; better searchable inventory and audit history; legacy sidecar import; automated pairing suggestions; dependency update/CI automation; real-account integration checks. There is no automatic pricing or sold-comps service planned into this foundation.

@@ -1,8 +1,8 @@
 # eBay Draft Lister
 
-## V2 local application
+## V2 Windows desktop application
 
-The `feature/openai-v2-ui` branch adds a Windows-first FastAPI + SQLite + React/TypeScript application. Start with [V2 setup and workflow](docs/V2-SETUP.md): run `setup-windows.cmd`, configure `.env`, then run `launch-windows.cmd`.
+The `feature/openai-v2-ui` branch adds a Windows desktop app with its own native window, using FastAPI + SQLite + React/TypeScript and a pywebview/WebView2 shell. Start with [V2 setup and workflow](docs/V2-SETUP.md): run `setup-windows.cmd`, configure `.env`, then open **eBay Draft Lister** from the desktop shortcut (or `eBay Draft Lister.vbs`).
 
 V2 provides persistent inventory, photo pairing/review, OpenAI or Claude structured vision extraction, editable listings, explicit manual pricing, Cloudinary JPEG uploads and compatible eBay draft CSV export. The original script below is preserved as a legacy reference and is not used by v2. Master is unchanged.
 

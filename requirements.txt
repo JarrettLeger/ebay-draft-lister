@@ -10,3 +10,4 @@ pillow>=11,<13
 pillow-heif>=0.22,<2
 pytest>=8,<10
 httpx>=0.28,<1
+pywebview>=6,<7
